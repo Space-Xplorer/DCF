@@ -38,7 +38,11 @@ PG_DB    = os.getenv("PGDATABASE", "finance_db")
 PG_PASS  = os.getenv("PGPASSWORD", "postgres")
 PG_TABLE = os.getenv("PGTABLE", "public.osc_financials")
 
-CSV_FALLBACK = os.getenv("OSC_CSV", "osc_combined_postgres_format.csv")
+# Use data directory for CSV fallback
+CSV_FALLBACK = os.getenv(
+    "OSC_CSV",
+    os.path.join(os.path.dirname(__file__), "data", "osc_combined_postgres_format.csv")
+)
 
 
 # ----------------------------- prompt helpers -----------------------------
@@ -51,8 +55,11 @@ def prompt_str(msg: str, default: Optional[str] = None) -> str:
 
 def prompt_float(msg: str, default: Optional[float]) -> Optional[float]:
     shown = f"{default:.4f}" if default is not None else "NA"
+    
     try:
         s = input(f"{msg} [default {shown}]: ").strip()
+        if s == "":
+            return default
         if(msg=="Sales growth rate for next 5 years (G1)" or msg=="Sales growth rate for following 5 years (G2)"):
             while(float(s)<=0):
                 print("Growth rate cannot be negative.")
@@ -63,8 +70,7 @@ def prompt_float(msg: str, default: Optional[float]) -> Optional[float]:
                 s = input(f"{msg} [default {shown}]: ").strip()
     except EOFError:
         s = ""
-    if s == "":
-        return default
+    
     try:
         return float(s)
     except ValueError:
@@ -112,7 +118,7 @@ def load_dataset() -> pd.DataFrame:
         "Net sales":"net_sales",
         "Raw materials, stocks, spares, purchase of finished goods":"raw_materials_stocks_spares_purchase_fg",
         "Salaries and wages":"salaries_and_wages",
-        "Other income & extra-ordinary income":"other_income_extra_ordinary_income",
+        "Other income & extra-ordinary income":"other_income_and_extraordinary_income",
         "Depreciation":"depreciation",
         "Interest expenses":"interest_expenses",
         "PBT":"pbt",
@@ -176,7 +182,7 @@ def fy_sums(sub: pd.DataFrame) -> pd.DataFrame:
         "net_sales",
         "raw_materials_stocks_spares_purchase_fg",
         "salaries_and_wages",
-        "other_income_extra_ordinary_income",
+        "other_income_and_extraordinary_income",
         "depreciation",
         "interest_expenses",
         "pbt",
@@ -246,7 +252,9 @@ def hist_from_fy_sums(fy_df: pd.DataFrame) -> pd.DataFrame:
             continue
         fy = int(r["fy"])
         sales = r.get("net_sales")
-        oi = r.get("other_income_extra_ordinary_income")
+        rm= r.get("raw_materials_stocks_spares_purchase_fg")
+        sw = r.get("salaries_and_wages")
+        oi = r.get("other_income_and_extraordinary_income")
         dep = r.get("depreciation")
         it = r.get("interest_expenses")
         pbt = r.get("pbt")
@@ -254,9 +262,8 @@ def hist_from_fy_sums(fy_df: pd.DataFrame) -> pd.DataFrame:
             hist.append({"fy": fy, "sales": np.nan})
             continue
         op = np.nan
-        if not any(pd.isna([pbt, oi, it, dep])):
-            # From identity: PBT = OP - Dep - Int + OI  ⇒  OP = PBT + Dep + Int − OI
-            op = pbt + dep + it - oi
+        if not any(pd.isna([sales, rm, sw])):
+            op = sales - (rm + sw)  # simpler OP calc
         hist.append({
             "fy": fy,
             "sales": sales,
@@ -375,6 +382,40 @@ def run_dcf_from_base_fy(
         "intrinsic_per_share_rupees": intrinsic_rupees
     }
 
+# ----------------------------- default-source helpers -----------------------------
+from typing import Tuple, Optional
+
+def latest_non_nan(series: pd.Series) -> Tuple[Optional[float], Optional[int]]:
+    """
+    Return (value, fy_used) for the most recent non-NaN entry in a series indexed by FY (int).
+    If none found, returns (None, None).
+    """
+    if series is None or series.empty:
+        return None, None
+    s = series.dropna()
+    if s.empty:
+        return None, None
+    s = s.sort_index()  # FY ascending
+    return float(s.iloc[-1]), int(s.index[-1])
+
+def latest_yoy_growth_from_sales(sales_by_fy: pd.Series) -> Tuple[Optional[float], Optional[Tuple[int,int]]]:
+    """
+    Find the most recent pair of consecutive FYs with non-NaN, non-zero sales and compute YoY growth:
+    (Sales_t / Sales_{t-1} - 1). Walk backward if the very latest pair is invalid/missing.
+    Returns (growth, (fy_prev, fy_curr)); or (None, None) if no valid pair exists.
+    """
+    if sales_by_fy is None or sales_by_fy.empty:
+        return None, None
+    s = sales_by_fy.dropna().sort_index()  # FY ascending
+    if len(s) < 2:
+        return None, None
+    years = list(s.index)
+    for i in range(len(years) - 1, 0, -1):
+        fy_prev, fy_curr = int(years[i-1]), int(years[i])
+        prev, curr = s.loc[fy_prev], s.loc[fy_curr]
+        if prev is not None and curr is not None and prev != 0:
+            return float(curr / prev - 1.0), (fy_prev, fy_curr)
+    return None, None
 
 # ----------------------------- main -----------------------------
 def main():
@@ -390,6 +431,7 @@ def main():
 
     # Build FY sums and pick base FY
     fy_df = fy_sums(sub)
+    print("\n[DEBUG] FY df columns:", fy_df.columns.tolist())
     if fy_df.empty:
         print("No fiscal-year data for this company.")
         sys.exit(1)
@@ -406,21 +448,53 @@ def main():
     
     # Historical ratios from complete FYs (for defaults)
     hist = hist_from_fy_sums(fy_df)
-    sales_series = hist["sales"].dropna() if "sales" in hist else pd.Series(dtype=float)
-    growth_hist = sales_series.pct_change().dropna() if not sales_series.empty else pd.Series(dtype=float)
+        # --- Build FY-indexed sales series (already only complete FYs in hist) ---
+    sales_series = hist["sales"] if "sales" in hist else pd.Series(dtype=float)
 
-    def pick_default(series, fallback):
-        try:
-            return (avg_recent(series, 5) if series is not None else None) or fallback
-        except Exception:
-            return fallback
+    # --- G1: latest YoY growth from the latest valid consecutive FY pair ---
+    g1_val, g1_pair = latest_yoy_growth_from_sales(sales_series)
+    if g1_val is None:
+        # ultimate fallback if no valid pair exists at all
+        g1_val, g1_pair = 0.08, None
+    growth1_def = g1_val
 
-    growth1_def = pick_default(growth_hist, 0.08)
-    growth2_def = (growth1_def * 0.9) if growth1_def is not None else 0.072
-    exp_def     = pick_default(hist.get("expenses_pct"), 0.60)
-    dep_def     = pick_default(hist.get("depr_pct_of_op"), 0.05)
-    int_def     = pick_default(hist.get("interest_pct_of_sales"), 0.02)
-    oi_def      = pick_default(hist.get("other_inc_pct_of_sales"), 0.01)
+    # --- G2: policy = 0.9 × G1 (as requested) ---
+    growth2_def = growth1_def * 0.9 if growth1_def is not None else 0.072
+
+    # --- Ratios: take the latest available FY value for each pre-computed ratio (no cross-year mixing) ---
+    exp_def,  exp_fy  = latest_non_nan(hist.get("expenses_pct"))
+    dep_def,  dep_fy  = latest_non_nan(hist.get("depr_pct_of_op"))
+    int_def,  int_fy  = latest_non_nan(hist.get("interest_pct_of_sales"))
+    oi_def,   oi_fy   = latest_non_nan(hist.get("other_inc_pct_of_sales"))
+
+    # --- Final safety fallbacks if an entire series is missing ---
+    if exp_def is None: exp_def = 0.60
+    if dep_def is None: dep_def = 0.05
+    if int_def is None: int_def = 0.02
+    if oi_def  is None: oi_def  = 0.01
+
+    # --- Optional: clamp to sensible ranges to avoid edge-case explosions ---
+    exp_def = float(np.clip(exp_def, 0.0, 0.99))  # 0%..99%
+    if dep_def is not None and dep_def < 0: dep_def = 0.0
+    if int_def is not None and int_def < 0: int_def = 0.0
+    # other income % can be negative (net other expense), so leave unclipped or clamp symmetrically if you like:
+    # oi_def = float(np.clip(oi_def, -0.5, 0.5))
+
+    # --- Tell the user which FYs supplied each default (so fallbacks are transparent) ---
+    print("\n--- Default sources (latest available) ---")
+    if g1_pair:
+        print(f"G1 from YoY Sales FY{g1_pair[0]}→FY{g1_pair[1]}: {growth1_def:.4f}")
+    else:
+        print(f"G1 fallback: {growth1_def:.4f}")
+    print(f"G2 = 0.9 × G1: {growth2_def:.4f}")
+    if exp_fy: print(f"Expenses % of sales from FY{exp_fy}: {exp_def:.4f}")
+    else:      print(f"Expenses % of sales fallback: {exp_def:.4f}")
+    if dep_fy: print(f"Depreciation % of OP from FY{dep_fy}: {dep_def:.4f}")
+    else:      print(f"Depreciation % of OP fallback: {dep_def:.4f}")
+    if int_fy: print(f"Interest % of sales from FY{int_fy}: {int_def:.4f}")
+    else:      print(f"Interest % of sales fallback: {int_def:.4f}")
+    if oi_fy:  print(f"Other income % of sales from FY{oi_fy}: {oi_def:.4f}")
+    else:      print(f"Other income % of sales fallback: {oi_def:.4f}")
     tax_def     = 0.30
     coe_def     = 0.15
     tg_def      = 0.08
