@@ -1,5 +1,4 @@
 .env
-data/
 Temp/
 _pycache_/
 *.pyc
