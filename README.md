@@ -45,44 +45,46 @@ DCF-Final-2/
 ├── alfaquest_model_price_sateesh.py
 ├── data/
 │   └── osc_combined_postgres_format.csv
-├── README.md
+
+## Features
+
+- Interactive DCF valuation for Indian stocks
+- Loads data from PostgreSQL or CSV fallback
+- Multi-scenario analysis (Base, Optimistic, Reasonable, Pessimistic)
+- Tabular summary and CSV export
+- Robust error handling and input validation
+- **Automatic alternate exchange lookup:** If the symbol is not found in the preferred exchange, the script will automatically try the alternate exchange before failing.
+
+## Usage
+
+Run:
+
+```sh
+python main.py
 ```
 
----
+Follow the prompts to select a company and enter DCF parameters. If the symbol is not found in your chosen exchange, the script will automatically check the other exchange before prompting again.
 
-## How to Run
+## Requirements
 
-1. **Prepare Data:**
-	 - Place your financials CSV in the `data/` directory (default: `osc_combined_postgres_format.csv`).
-	 - Or, set up a PostgreSQL database and update connection details in `main.py`.
+- Python 3.8+
+- pandas, numpy, sqlalchemy, python-dotenv
 
-2. **Run the Script:**
-	 ```sh
-	 python main.py
-	 ```
+## Data Setup
 
-3. **Follow Prompts:**
-	 - Enter the company symbol (NSE or BSE).
-	 - Choose your preferred exchange for shares outstanding.
-	 - Specify units for money and shares.
-	 - Review and accept or override default DCF assumptions.
-	 - Choose your cost of equity method (earnings yield or CAPM).
-	 - Enter terminal growth and other parameters as prompted.
+Configure your `.env` file for PostgreSQL connection, or place your CSV in the `Data/` folder.
 
-4. **View Results:**
-	 - The script will print a detailed summary of the valuation.
-	 - If enabled, results are saved to Excel in the project directory.
+## New in this version
 
----
+- Multi-scenario DCF (Base, Optimistic, Reasonable, Pessimistic)
+- Tabular summary output
+- CSV export for all scenarios
+- Input validation for all financial parameters
+- **Automatic alternate exchange lookup for company symbol**
 
 ## Notes
 
-- For CAPM-based cost of equity, you will need a free API key from [Financial Modeling Prep](https://financialmodelingprep.com/).
-- The tool is designed for Indian equities but can be adapted for other markets with similar data.
-- All calculations and logic are transparent and can be reviewed or modified in `main.py`.
-
----
-
+- If neither exchange matches, you will be prompted to try again.
 ## Credits
 
 Developed for **AlphaGoResearch**.

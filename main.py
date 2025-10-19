@@ -486,18 +486,33 @@ def main():
 
     print("\n--- Company selection ---")
     while True:
+        # symbol = prompt_str("Enter company symbol (NSE symbol or BSE scrip id)")
+        # while True:
+        #     exchange_pref = prompt_str("Preferred exchange for Shares Outstanding (NSE/BSE)", "NSE").strip().upper()
+        #     if exchange_pref in ("NSE", "BSE"):
+        #         break
+        #     print("Invalid exchange. Please enter 'NSE' or 'BSE'.")
+        # try:
+        #     sub, used_exch = pick_company(df, symbol, exchange_pref)
+        #     break  # Success
+        # except ValueError as e:
+        #     print(f"[error] {e}")
+        #     print("Please try again with a valid symbol.")
         symbol = prompt_str("Enter company symbol (NSE symbol or BSE scrip id)")
-        while True:
-            exchange_pref = prompt_str("Preferred exchange for Shares Outstanding (NSE/BSE)", "NSE").strip().upper()
-            if exchange_pref in ("NSE", "BSE"):
-                break
-            print("Invalid exchange. Please enter 'NSE' or 'BSE'.")
+        exchange_pref = prompt_str("Preferred exchange for Shares Outstanding (NSE/BSE)", "NSE").upper()
         try:
             sub, used_exch = pick_company(df, symbol, exchange_pref)
-            break  # Success
+            break  # Success, exit loop
         except ValueError as e:
-            print(f"[error] {e}")
-            print("Please try again with a valid symbol.")
+            # Try alternate exchange
+            alt_exch = "BSE" if exchange_pref == "NSE" else "NSE"
+            try:
+                sub, used_exch = pick_company(df, symbol, alt_exch)
+                print(f"[info] Symbol not found in {exchange_pref}, but found in {alt_exch}. Using {alt_exch}.")
+                break
+            except ValueError:
+                print(f"[error] {e}")
+                print(f"Symbol '{symbol}' not found in either exchange. Please try again.")
 
     if used_exch != exchange_pref:
         print(f"Note: symbol matched via {used_exch}; still prefer {exchange_pref} for shares.")
