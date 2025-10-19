@@ -90,4 +90,4 @@ Configure your `.env` file for PostgreSQL connection, or place your CSV in the `
 Developed for **AlphaGoResearch**.
 
 For questions or contributions, please contact the project maintainer.
-# DCF-Final-V2
+# DCF-Interactive-Indian-Equities/
