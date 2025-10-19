@@ -20,9 +20,13 @@ import os
 import sys
 from typing import Optional, Tuple, List, Dict
 
-import numpy as np
-import pandas as pd
-from dotenv import load_dotenv
+try:
+    import numpy as np
+    import pandas as pd
+    from dotenv import load_dotenv
+except ImportError as e:
+    print(f"[error] Required package missing: {e}. Please install all dependencies.")
+    sys.exit(1)
 
 # Optional PG libs
 try:
@@ -148,6 +152,19 @@ def load_dataset() -> pd.DataFrame:
         df = load_from_csv()
     if df is None or df.empty:
         print("[error] No data loaded from PG or CSV. Exiting.")
+        sys.exit(1)
+    # Validate required columns
+    required_cols = [
+        "Company Name", "NSE symbol", "BSE scrip id", "Information Type", "Year", "Quarter",
+        "Net sales", "Raw materials, stocks, spares, purchase of finished goods",
+        "Salaries and wages", "Other income & extra-ordinary income", "Depreciation",
+        "Interest expenses", "PBT", "Total tax provision", "Reported Profit after tax",
+        "PAT net of P&E", "Shares Outstanding_NSE", "Shares Outstanding_BSE",
+        "EPS_NSE", "EPS_BSE", "P/E_NSE", "P/E_BSE"
+    ]
+    missing = [col for col in required_cols if col not in df.columns]
+    if missing:
+        print(f"[error] Missing columns in data: {missing}")
         sys.exit(1)
     ren = {
         "Company Name":"company_name", "NSE symbol":"nse_symbol", "BSE scrip id":"bse_scrip_id",
@@ -740,3 +757,8 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\nInterrupted by user.")
+    except Exception as e:
+        print(f"\n[error] Unhandled exception: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
