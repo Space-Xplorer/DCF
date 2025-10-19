@@ -1,6 +1,6 @@
-# DCF Valuation Engine for AlphaGoResearch
+# DCF Valuation Engine for AlfagoResearch
 
-This project is an interactive Discounted Cash Flow (DCF) valuation tool designed for Indian equities, developed for AlphaGoResearch. It enables analysts and investors to estimate the intrinsic value of a stock using company-specific historical data, with flexible data sources and robust financial logic.
+This project is an interactive Discounted Cash Flow (DCF) valuation tool designed for Indian equities, developed for AlfagoResearch. It enables analysts and investors to estimate the intrinsic value of a stock using company-specific historical data, with flexible data sources and robust financial logic.
 
 ---
 
@@ -42,9 +42,11 @@ pip install pandas numpy openpyxl requests sqlalchemy psycopg2-binary
 ```
 DCF-Final-2/
 ├── main.py
-├── alfaquest_model_price_sateesh.py
+├── license
+├── .gitignore
 ├── data/
 │   └── osc_combined_postgres_format.csv
+│   └── DCF table schema.csv
 
 ## Features
 
@@ -87,7 +89,7 @@ Configure your `.env` file for PostgreSQL connection, or place your CSV in the `
 - If neither exchange matches, you will be prompted to try again.
 ## Credits
 
-Developed for **AlphaGoResearch**.
+Developed for **AlfagoResearch**.
 
-For questions or contributions, please contact the project maintainer.
+For questions or contributions, don't hesitate to get in touch with the project maintainer.
 # DCF-Interactive
