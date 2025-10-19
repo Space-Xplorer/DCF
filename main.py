@@ -22,6 +22,7 @@ from typing import Optional, Tuple, List, Dict
 
 import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
 
 # Optional PG libs
 try:
@@ -29,6 +30,8 @@ try:
     from sqlalchemy import text
 except Exception:
     sqlalchemy = None
+
+load_dotenv()
 
 # ---------- Defaults (override via environment) ----------
 PG_HOST  = os.getenv("PGHOST", "localhost")
@@ -55,27 +58,52 @@ def prompt_str(msg: str, default: Optional[str] = None) -> str:
 
 def prompt_float(msg: str, default: Optional[float]) -> Optional[float]:
     shown = f"{default:.4f}" if default is not None else "NA"
-    
-    try:
-        s = input(f"{msg} [default {shown}]: ").strip()
+    while True:
+        try:
+            s = input(f"{msg} [default {shown}]: ").strip()
+        except EOFError:
+            s = ""
         if s == "":
             return default
-        if(msg=="Sales growth rate for next 5 years (G1)" or msg=="Sales growth rate for following 5 years (G2)"):
-            while(float(s)<=0):
-                print("Growth rate cannot be negative.")
-                s = input(f"{msg} [default {shown}]: ").strip()
-        if(msg=="Expenses as % of sales"):
-            while(float(s)<0 or float(s)>=1):
+        try:
+            val = float(s)
+        except ValueError:
+            print("Invalid number. Please enter a valid numeric value.")
+            continue
+        # Validation for specific prompts
+        if msg == "Sales growth rate for next 5 years (G1)" or msg == "Sales growth rate for following 5 years (G2)":
+            if val <= 0:
+                print("Growth rate cannot be negative or zero.")
+                continue
+        if msg == "Expenses as % of sales":
+            if val < 0 or val >= 1:
                 print("Expenses percentage must be in [0, 1).")
-                s = input(f"{msg} [default {shown}]: ").strip()
-    except EOFError:
-        s = ""
-    
-    try:
-        return float(s)
-    except ValueError:
-        print("Invalid number. Using default.")
-        return default
+                continue
+        if msg == "Depreciation as % of Operating Profit":
+            if val < 0 or val >= 1:
+                print("Depreciation must be between 0 and 1 (not negative, less than 1).")
+                continue
+        if msg == "Interest as % of sales":
+            if val < 0 or val >= 1:
+                print("Interest must be between 0 and 1 (not negative, less than 1).")
+                continue
+        if msg == "Other income as % of sales":
+            if val < 0 or val >= 1:
+                print("Other income must be between 0 and 1 (not negative, less than 1).")
+                continue
+        if msg == "Tax rate (on PBT)":
+            if val < 0 or val >= 1:
+                print("Tax rate must be between 0 and 1 (not negative, less than 1).")
+                continue
+        if msg == "Cost of equity (COE)":
+            if val <= 0 or val >= 1:
+                print("COE must be greater than 0 and less than 1.")
+                continue
+        if msg == "Terminal growth (G)":
+            if val < 0 or val >= 0.15:
+                print("Terminal growth must be between 0 and 0.15.")
+                continue
+        return val
 
 def avg_recent(s: pd.Series, n: int) -> Optional[float]:
     s = s.dropna()
@@ -103,15 +131,24 @@ def load_from_pg() -> Optional[pd.DataFrame]:
 
 def load_from_csv() -> pd.DataFrame:
     path = CSV_FALLBACK
-    df = pd.read_csv(path, low_memory=False)
-    print(f"[info] Loaded {len(df):,} rows from CSV: {path}")
-    return df
+    try:
+        df = pd.read_csv(path, low_memory=False)
+        print(f"[info] Loaded {len(df):,} rows from CSV: {path}")
+        return df
+    except FileNotFoundError:
+        print(f"[error] CSV file not found: {path}")
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"[error] Failed to load CSV: {e}")
+        return pd.DataFrame()
 
 def load_dataset() -> pd.DataFrame:
     df = load_from_pg()
-    if df is None:
+    if df is None or df.empty:
         df = load_from_csv()
-    # OSC rename mapping
+    if df is None or df.empty:
+        print("[error] No data loaded from PG or CSV. Exiting.")
+        sys.exit(1)
     ren = {
         "Company Name":"company_name", "NSE symbol":"nse_symbol", "BSE scrip id":"bse_scrip_id",
         "Information Type":"information_type", "Year":"year", "Quarter":"quarter",
@@ -288,7 +325,8 @@ def run_dcf_from_base_fy(
     interest_pct_of_sales: float, other_inc_pct_of_sales: float,
     tax_rate: float, coe: float, tg: float,
     preferred_exchange: str,
-    money_factor: float, shares_factor: float
+    money_factor: float, shares_factor: float,
+    sales_overrides: Optional[Dict[int, float]] = None  # ← ADD THIS
 ):
     """
     money_factor: multiplier to convert NPAT from stored unit to RUPEES
@@ -322,8 +360,13 @@ def run_dcf_from_base_fy(
         fy = base_fy + i
         g = growth1 if i <= 5 else growth2
 
-        # Project sales; floor at 0 to avoid nonsense with negative growth
-        sales = max(0.0, sales * (1.0 + (g or 0.0)))
+        # Check for sales override for this specific year
+        if sales_overrides and fy in sales_overrides and pd.notna(sales_overrides[fy]):
+            sales = max(0.0, float(sales_overrides[fy]))
+        else:
+            sales = max(0.0, sales * (1.0 + (g or 0.0)))
+        if sales == 0.0:
+            print(f"[warn] Projected sales for FY{fy} is zero. All subsequent metrics will be zero.")
         expenses = max(0.0, (expenses_pct or 0.0) * sales)
         op = sales - expenses
 
@@ -382,6 +425,25 @@ def run_dcf_from_base_fy(
         "intrinsic_per_share_rupees": intrinsic_rupees
     }
 
+def build_sales_path_for_10y(base_sales: float, base_fy: int, g1: float, g2: float,
+                             first_year_override: Optional[float] = None) -> Dict[int, float]:
+    """
+    Build a 10-year sales path with optional first-year override.
+    Returns dict: {fy: sales_value}
+    """
+    sales_map = {}
+    prev = base_sales
+    for i in range(1, 11):
+        fy = base_fy + i
+        g = g1 if i <= 5 else g2
+        if i == 1 and first_year_override is not None:
+            curr = max(0.0, float(first_year_override))
+        else:
+            curr = max(0.0, prev * (1.0 + (g or 0.0)))
+        sales_map[fy] = curr
+        prev = curr
+    return sales_map
+
 # ----------------------------- default-source helpers -----------------------------
 from typing import Tuple, Optional
 
@@ -413,7 +475,7 @@ def latest_yoy_growth_from_sales(sales_by_fy: pd.Series) -> Tuple[Optional[float
     for i in range(len(years) - 1, 0, -1):
         fy_prev, fy_curr = int(years[i-1]), int(years[i])
         prev, curr = s.loc[fy_prev], s.loc[fy_curr]
-        if prev is not None and curr is not None and prev != 0:
+        if prev is not None and curr is not None and prev > 0:
             return float(curr / prev - 1.0), (fy_prev, fy_curr)
     return None, None
 
@@ -423,9 +485,20 @@ def main():
     df = load_dataset()
 
     print("\n--- Company selection ---")
-    symbol = prompt_str("Enter company symbol (NSE symbol or BSE scrip id)")
-    exchange_pref = prompt_str("Preferred exchange for Shares Outstanding (NSE/BSE)", "NSE").upper()
-    sub, used_exch = pick_company(df, symbol, exchange_pref)
+    while True:
+        symbol = prompt_str("Enter company symbol (NSE symbol or BSE scrip id)")
+        while True:
+            exchange_pref = prompt_str("Preferred exchange for Shares Outstanding (NSE/BSE)", "NSE").strip().upper()
+            if exchange_pref in ("NSE", "BSE"):
+                break
+            print("Invalid exchange. Please enter 'NSE' or 'BSE'.")
+        try:
+            sub, used_exch = pick_company(df, symbol, exchange_pref)
+            break  # Success
+        except ValueError as e:
+            print(f"[error] {e}")
+            print("Please try again with a valid symbol.")
+
     if used_exch != exchange_pref:
         print(f"Note: symbol matched via {used_exch}; still prefer {exchange_pref} for shares.")
 
@@ -451,15 +524,18 @@ def main():
         # --- Build FY-indexed sales series (already only complete FYs in hist) ---
     sales_series = hist["sales"] if "sales" in hist else pd.Series(dtype=float)
 
-    # --- G1: latest YoY growth from the latest valid consecutive FY pair ---
-    g1_val, g1_pair = latest_yoy_growth_from_sales(sales_series)
-    if g1_val is None:
-        # ultimate fallback if no valid pair exists at all
-        g1_val, g1_pair = 0.08, None
-    growth1_def = g1_val
+    # Calculate YoY growth history for averaging
+    growth_hist = sales_series.pct_change().dropna() if not sales_series.empty else pd.Series(dtype=float)
 
-    # --- G2: policy = 0.9 × G1 (as requested) ---
-    growth2_def = growth1_def * 0.9 if growth1_def is not None else 0.072
+    def pick_default(series, fallback):
+        """Average of last 5 values, or fallback"""
+        try:
+            return (avg_recent(series, 5) if series is not None else None) or fallback
+        except Exception:
+            return fallback
+
+    growth1_def = pick_default(growth_hist, 0.08)
+    growth2_def = (growth1_def * 0.9) if growth1_def is not None else 0.072
 
     # --- Ratios: take the latest available FY value for each pre-computed ratio (no cross-year mixing) ---
     exp_def,  exp_fy  = latest_non_nan(hist.get("expenses_pct"))
@@ -482,8 +558,8 @@ def main():
 
     # --- Tell the user which FYs supplied each default (so fallbacks are transparent) ---
     print("\n--- Default sources (latest available) ---")
-    if g1_pair:
-        print(f"G1 from YoY Sales FY{g1_pair[0]}→FY{g1_pair[1]}: {growth1_def:.4f}")
+    if not growth_hist.empty:
+        print(f"G1 from avg of last 5 YoY growths: {growth1_def:.4f}")
     else:
         print(f"G1 fallback: {growth1_def:.4f}")
     print(f"G2 = 0.9 × G1: {growth2_def:.4f}")
@@ -518,47 +594,131 @@ def main():
     
 
     # Run DCF using the chosen base FY (same-year values only)
+        # ----------------------------- Run scenarios -----------------------------
+    results = {}
     try:
-        res = run_dcf_from_base_fy(
-            base_row=base,
-            growth1=growth1, growth2=growth2,
-            expenses_pct=expenses_pct, depr_pct_of_op=depr_pct_of_op,
-            interest_pct_of_sales=interest_pct_of_sales, other_inc_pct_of_sales=other_inc_pct_of_sales,
-            tax_rate=tax_rate, coe=coe, tg=tg,
-            preferred_exchange=exchange_pref,
-            money_factor=money_factor,
-            shares_factor=shares_factor
+        # 1. Original growth-based DCF (no overrides)
+        results["original_growth"] = run_dcf_from_base_fy(
+            base_row=base, growth1=growth1, growth2=growth2, expenses_pct=expenses_pct,
+            depr_pct_of_op=depr_pct_of_op, interest_pct_of_sales=interest_pct_of_sales,
+            other_inc_pct_of_sales=other_inc_pct_of_sales, tax_rate=tax_rate, coe=coe, tg=tg,
+            preferred_exchange=exchange_pref, money_factor=money_factor, shares_factor=shares_factor
         )
+
+        # 2. Prepare scenario overrides
+        base_fy_num = int(base["fy"])
+        base_sales = float(base["net_sales"])
+
+        def get_hist_sales(fy):
+            try:
+                return float(fy_df.loc[fy_df["fy"] == fy, "net_sales"].iloc[0])
+            except (IndexError, TypeError):
+                return None
+
+        s_base = get_hist_sales(base_fy_num)
+        s_m1 = get_hist_sales(base_fy_num - 1)
+        s_m2 = get_hist_sales(base_fy_num - 2)
+        last3_hist = [v for v in [s_m2, s_m1, s_base] if v is not None]
+
+        if len(last3_hist) < 3:
+            print("\n[warn] Not enough historical data (3 FYs) for scenario analysis. Skipping scenarios.")
+            overrides = {}
+        else:
+            # Year 1 seeds
+            seed_y1_opt = (1.0 + (growth1 or 0.0)) * max(last3_hist)
+            seed_y1_reas_pess = (1.0 + (growth1 or 0.0)) * np.mean(last3_hist)
+
+            # Build intermediate paths to get Year 6 seeds
+            path_opt_seed = build_sales_path_for_10y(base_sales, base_fy_num, growth1, growth2, first_year_override=seed_y1_opt)
+            path_reas_pess_seed = build_sales_path_for_10y(base_sales, base_fy_num, growth1, growth2, first_year_override=seed_y1_reas_pess)
+            
+            y_intermediate = [base_fy_num + 3, base_fy_num + 4, base_fy_num + 5]
+            
+            seed_y6_opt = (1.0 + (growth2 or 0.0)) * np.mean([path_opt_seed[y] for y in y_intermediate])
+            seed_y6_reas = (1.0 + (growth2 or 0.0)) * np.mean([path_reas_pess_seed[y] for y in y_intermediate])
+            seed_y6_pess = (1.0 + (growth2 or 0.0)) * min([path_reas_pess_seed[y] for y in y_intermediate])
+            
+            overrides = {
+                "optimistic": {base_fy_num + 1: seed_y1_opt, base_fy_num + 6: seed_y6_opt},
+                "reasonable": {base_fy_num + 1: seed_y1_reas_pess, base_fy_num + 6: seed_y6_reas},
+                "pessimistic": {base_fy_num + 1: seed_y1_reas_pess, base_fy_num + 6: seed_y6_pess}
+            }
+
+        # 3. Run scenarios
+        for scenario, sales_overrides in overrides.items():
+            results[scenario] = run_dcf_from_base_fy(
+                base_row=base, growth1=growth1, growth2=growth2, expenses_pct=expenses_pct,
+                depr_pct_of_op=depr_pct_of_op, interest_pct_of_sales=interest_pct_of_sales,
+                other_inc_pct_of_sales=other_inc_pct_of_sales, tax_rate=tax_rate, coe=coe, tg=tg,
+                preferred_exchange=exchange_pref, money_factor=money_factor, shares_factor=shares_factor,
+                sales_overrides=sales_overrides
+            )
     except Exception as e:
-        print(f"DCF failed: {e}")
+        print(f"\nDCF calculations failed: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
-    f = res["forecast"]
+    # ----------------------------- Print results -----------------------------
     cname = sub["company_name"].dropna().iloc[0] if "company_name" in sub.columns and not sub["company_name"].dropna().empty else "(unknown)"
+    
+    reasonable_res = results.get("reasonable")
+    if reasonable_res:
+        f = reasonable_res["forecast"]
+        print("\n--- Detailed Forecast (Reasonable Scenario) ---")
+        print(f"Company: {cname}")
+        print(f"Symbol used: {symbol} ({used_exch})")
+        print(f"Base FY: FY{reasonable_res['base_fy']}")
+        print(f"Shares outstanding used (number): {reasonable_res['shares_numbers']:.0f}")
+        print("\nForecast (FY, sales, op_profit, depr, interest, other_inc, pbt, tax, npat, eps_rupees, pv_eps_rupees):")
+        print(f[['fy','sales','op_profit','depreciation','interest','other_income','pbt','tax','npat','eps_rupees','pv_eps_rupees']].to_string(index=False, float_format=lambda x: f"{x:.2f}"))
+        print("\nSum of PV(EPS₁…EPS₁₀) (₹): {:.6f}".format(reasonable_res["sum_pv_eps_rupees"]))
+        print("Terminal per share at t=10 (₹): {:.6f}".format(reasonable_res["tv_per_share_t10"]))
+        print("PV Terminal per share (₹): {:.6f}".format(reasonable_res["pv_tv_per_share_rupees"]))
 
-    print("\n--- Summary ---")
+    print("\n" + "="*70)
+    print("INTRINSIC VALUE SUMMARY")
+    print("="*70)
     print(f"Company: {cname}")
-    print(f"Symbol used: {symbol} ({used_exch})")
-    print(f"Base FY (sum of 4 quarters): FY{res['base_fy']}")
-    print(f"Shares outstanding used (number of shares): {res['shares_numbers']:.0f}")
+    print(f"Symbol: {symbol} ({used_exch})")
+    print(f"Base FY: FY{base['fy']}")
+    print("-"*70)
+    
+    for scenario_name in ["original_growth", "optimistic", "reasonable", "pessimistic"]:
+        res = results.get(scenario_name)
+        pretty_name = scenario_name.replace("_", " ").title()
+        if res:
+            print(f"{pretty_name:20s}: ₹{res['intrinsic_per_share_rupees']:12.2f}")
+        else:
+            print(f"{pretty_name:20s}: Calculation failed")
+    print("="*70)
 
-    print("\nForecast (FY, sales[as loaded], npat[as loaded], eps_rupees, pv_eps_rupees):")
-    print(f.loc[:, ['fy','sales','npat','eps_rupees','pv_eps_rupees']]
-          .to_string(index=False, float_format=lambda x: f"{x:.6f}"))
-
-    # Clear, consistent prints to match expected style
-    print("\nSum of PV(EPS₁…EPS₁₀) (₹): {:.6f}".format(res["sum_pv_eps_rupees"]))
-    print("Terminal per share at t=10 (₹) using EPS11/(r−g): {:.6f}".format(res["tv_per_share_t10"]))
-    print("PV Terminal per share (₹): {:.6f}".format(res["pv_tv_per_share_rupees"]))
-    print("Terminal (company, ₹) [undiscounted @ t=10]: {:.0f}".format(res["tv_company_t10_rupees"]))
-    print("PV Terminal (company, ₹): {:.0f}".format(res["pv_tv_company_rupees"]))
-    print("\nIntrinsic value per share (₹): {:.6f}".format(res["intrinsic_per_share_rupees"]))
-
-    save = prompt_str("\nSave forecast rows to CSV? (y/n)", "n").lower() in ("y","yes","1")
-    if save:
-        outp = prompt_str("Output CSV path", "dcf_forecast_output.csv")
-        f.to_csv(outp, index=False)
-        print(f"Saved: {outp}")
+    # ----------------------------- Export options -----------------------------
+    if any(results.values()):
+        save = prompt_str("\nSave forecasts to CSV? (y/n)", "n").lower() in ("y","yes","1")
+        if save:
+            combined = prompt_str("Save as single combined CSV (y) or separate files (n)?", "y").lower() in ("y","yes","1")
+            prefix = prompt_str("Output file prefix", "dcf_forecast")
+            exports = []
+            for name, res in results.items():
+                if res:
+                    exports.append((name, res["forecast"]))
+            
+            if combined:
+                tagged = []
+                for name, df_scn in exports:
+                    df_tag = df_scn.copy()
+                    df_tag["scenario"] = name
+                    tagged.append(df_tag)
+                df_all = pd.concat(tagged, ignore_index=True)
+                outp = f"{prefix}_ALL.csv"
+                df_all.to_csv(outp, index=False)
+                print(f"Saved combined CSV: {outp}")
+            else:
+                for name, df_scn in exports:
+                    outp = f"{prefix}_{name}.csv"
+                    df_scn.to_csv(outp, index=False)
+                    print(f"Saved: {outp}")
 
 if __name__ == "__main__":
     try:

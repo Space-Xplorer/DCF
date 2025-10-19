@@ -1,3 +1,8 @@
 .env
 data/
 Temp/
+_pycache_/
+*.pyc
+*.md
+*.txt
+test.py
