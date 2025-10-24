@@ -1,0 +1,78 @@
+# ============================================================================
+# TERRAFORM.TFVARS.EXAMPLE
+# ============================================================================
+# Copy this file to terraform.tfvars and update with your values
+# Command: cp terraform.tfvars.example terraform.tfvars
+# ============================================================================
+
+# ============================================================================
+# REQUIRED VARIABLES (must be set)
+# ============================================================================
+
+# EC2 key pair name (create in AWS Console first)
+key_name = "dcf-key"
+
+# Database password (only needed if enable_rds = true)
+db_password = "YourSecurePassword123!"
+
+# GitHub repository (update with your repo)
+github_repo = "https://github.com/Space-Xplorer/DCF-Final-V2.git"
+
+# ============================================================================
+# 💰 LOW-COST MODE CONFIGURATION (Recommended for $100 budget)
+# ============================================================================
+
+# Use t3.micro (FREE TIER eligible - 750 hours/month free for 12 months)
+instance_type = "t3.micro"  # 1 vCPU, 1 GB RAM (~$7.50/month or FREE)
+
+# Use SQLite instead of RDS (saves $15/month)
+enable_rds = false  # true = PostgreSQL RDS, false = SQLite
+
+# Skip Elastic IP (saves $3.60/month)
+use_elastic_ip = false  # Use dynamic IP (free)
+
+# Use smaller EBS volume (FREE TIER: 30GB free)
+ebs_volume_size = 8  # 8 GB GP3 SSD (adequate for SQLite + app)
+
+# ============================================================================
+# 💵 STANDARD MODE (If you need more performance/RDS)
+# ============================================================================
+# Uncomment below to use standard configuration (~$41/month)
+#
+# instance_type = "t3.small"       # 2 vCPU, 2 GB RAM (~$15/month)
+# enable_rds = true                # Enable PostgreSQL RDS
+# db_instance_class = "db.t3.micro" # RDS instance (~$15/month)
+# use_elastic_ip = true            # Static IP (~$3.60/month)
+# ebs_volume_size = 30             # 30 GB storage (~$3/month)
+
+# ============================================================================
+# OPTIONAL VARIABLES (defaults provided)
+# ============================================================================
+
+# AWS Region
+# aws_region = "us-east-1"
+
+# Environment
+environment = "dev-low-cost"
+
+# Database Configuration (only used if enable_rds = true)
+# db_name = "finance_db"
+# db_username = "postgres"
+
+# SSH Access (restrict to your IP for security)
+# ssh_cidr_blocks = ["203.0.113.0/32"]  # Replace with your IP
+
+# Application Access
+# app_cidr_blocks = ["0.0.0.0/0"]
+
+# GitHub Branch
+# github_branch = "main"
+
+# Application Port
+# app_port = 8000
+
+# Log Level
+# log_level = "INFO"
+
+# Data Refresh Frequency (days)
+# data_refresh_days = 90  # Quarterly refresh

@@ -1,7 +1,70 @@
-.env
-Temp/
-_pycache_/
-*.pyc
+__pycache__/
+# Environment.env
+
+.envTemp/
+
+.env.local_pycache_/
+
+.env.*.local*.pyc
+
 *.md
-*.txt
-test.py
+
+# Python*.txt
+
+__pycache__/test.py
+
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pyc
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Logs
+*.log
+logs/
+
+# Data
+Data/*.csv
+Data/*.xlsx
+
+# Temporary
+tmp/
+temp/
+*.tmp
